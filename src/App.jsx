@@ -127,11 +127,18 @@ export default function App() {
     if (loading || avisoMostrado.current) return
     avisoMostrado.current = true
 
-    if (!('Notification' in window)) return
+    console.log('[aviso] evaluando notificacion. items:', items.length)
+
+    if (!('Notification' in window)) {
+      console.log('[aviso] este navegador no soporta Notification')
+      return
+    }
 
     const urgentes = items
       .map((i) => ({ ...i, semaforo: getSemaforo(i) }))
       .filter((i) => i.estado !== 'completado' && (i.semaforo === 'vencida' || i.semaforo === 'hoy'))
+
+    console.log('[aviso] urgentes encontradas:', urgentes.length, urgentes)
 
     if (urgentes.length === 0) return
 
@@ -144,7 +151,10 @@ export default function App() {
       new Notification('Tienes pendientes', { body: partes.join(' · ') })
     }
 
+    console.log('[aviso] permiso actual:', Notification.permission)
+
     if (Notification.permission === 'granted') {
+      console.log('[aviso] disparando notificacion')
       mostrarAviso()
     } else if (Notification.permission === 'default') {
       Notification.requestPermission().then((permiso) => {
