@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { supabase } from './supabaseClient'
 
 const TIPOS = {
@@ -118,6 +118,40 @@ export default function App() {
   useEffect(() => {
     cargarPendientes()
   }, [])
+
+  // Aviso del navegador (una sola vez, en la carga inicial) si hay tareas
+  // vencidas o para hoy.
+  const avisoMostrado = useRef(false)
+
+  useEffect(() => {
+    if (loading || avisoMostrado.current) return
+    avisoMostrado.current = true
+
+    if (!('Notification' in window)) return
+
+    const urgentes = items
+      .map((i) => ({ ...i, semaforo: getSemaforo(i) }))
+      .filter((i) => i.estado !== 'completado' && (i.semaforo === 'vencida' || i.semaforo === 'hoy'))
+
+    if (urgentes.length === 0) return
+
+    function mostrarAviso() {
+      const vencidas = urgentes.filter((i) => i.semaforo === 'vencida').length
+      const hoy = urgentes.filter((i) => i.semaforo === 'hoy').length
+      const partes = []
+      if (vencidas > 0) partes.push(`${vencidas} vencida${vencidas > 1 ? 's' : ''}`)
+      if (hoy > 0) partes.push(`${hoy} para hoy`)
+      new Notification('Tienes pendientes', { body: partes.join(' · ') })
+    }
+
+    if (Notification.permission === 'granted') {
+      mostrarAviso()
+    } else if (Notification.permission === 'default') {
+      Notification.requestPermission().then((permiso) => {
+        if (permiso === 'granted') mostrarAviso()
+      })
+    }
+  }, [loading, items])
 
   function resetFormNueva() {
     setNuevoTexto('')
