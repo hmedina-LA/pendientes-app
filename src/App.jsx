@@ -9,6 +9,8 @@ const TIPOS = {
   idea: { label: 'Idea' },
 }
 
+const UNIDADES = ['días', 'semanas', 'meses']
+
 const FILTROS = [
   ['todas', 'Todas'],
   ['vencida', 'Vencidas'],
@@ -36,7 +38,7 @@ function getSemaforo(item) {
 
 function notaFor(item, semaforo) {
   if (item.estado === 'completado') return 'Completada'
-  if (item.tipo === 'mantenimiento' && item.intervalo_valor) {
+  if ((item.tipo === 'mantenimiento' || item.tipo === 'recurrente') && item.intervalo_valor) {
     return `Cada ${item.intervalo_valor} ${item.intervalo_unidad}`
   }
   if (semaforo === 'vencida') return 'Vencida'
@@ -44,12 +46,61 @@ function notaFor(item, semaforo) {
   return item.tipo === 'idea' ? 'Algún día' : 'Sin fecha'
 }
 
+// Formulario compartido para crear y editar (fecha + recurrencia)
+function CamposFecha({ tipo, setTipo, fecha, setFecha, intervaloValor, setIntervaloValor, intervaloUnidad, setIntervaloUnidad }) {
+  return (
+    <div className="opciones-form">
+      <select value={tipo} onChange={(e) => setTipo(e.target.value)}>
+        <option value="rapida">Sin fecha (rápida)</option>
+        <option value="fecha">Fecha específica</option>
+        <option value="recurrente">Recurrente</option>
+      </select>
+
+      {(tipo === 'fecha' || tipo === 'recurrente') && (
+        <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} />
+      )}
+
+      {tipo === 'recurrente' && (
+        <div className="recurrente-campos">
+          <span>Cada</span>
+          <input
+            type="number"
+            min="1"
+            value={intervaloValor}
+            onChange={(e) => setIntervaloValor(e.target.value)}
+          />
+          <select value={intervaloUnidad} onChange={(e) => setIntervaloUnidad(e.target.value)}>
+            {UNIDADES.map((u) => (
+              <option key={u} value={u}>{u}</option>
+            ))}
+          </select>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function App() {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [filtro, setFiltro] = useState('todas')
+
+  // --- estado del formulario de nueva tarea ---
   const [nuevoTexto, setNuevoTexto] = useState('')
+  const [mostrarOpciones, setMostrarOpciones] = useState(false)
+  const [nuevoTipo, setNuevoTipo] = useState('rapida')
+  const [nuevaFecha, setNuevaFecha] = useState('')
+  const [nuevoIntervaloValor, setNuevoIntervaloValor] = useState(1)
+  const [nuevoIntervaloUnidad, setNuevoIntervaloUnidad] = useState('días')
+
+  // --- estado de edición ---
+  const [editandoId, setEditandoId] = useState(null)
+  const [editTexto, setEditTexto] = useState('')
+  const [editTipo, setEditTipo] = useState('rapida')
+  const [editFecha, setEditFecha] = useState('')
+  const [editIntervaloValor, setEditIntervaloValor] = useState(1)
+  const [editIntervaloUnidad, setEditIntervaloUnidad] = useState('días')
 
   async function cargarPendientes() {
     setLoading(true)
@@ -68,22 +119,41 @@ export default function App() {
     cargarPendientes()
   }, [])
 
+  function resetFormNueva() {
+    setNuevoTexto('')
+    setNuevoTipo('rapida')
+    setNuevaFecha('')
+    setNuevoIntervaloValor(1)
+    setNuevoIntervaloUnidad('días')
+    setMostrarOpciones(false)
+  }
+
   async function agregarDesdeInbox() {
     const titulo = nuevoTexto.trim()
     if (!titulo) return
 
-    const { error } = await supabase.from('pendientes').insert({
+    if ((nuevoTipo === 'fecha' || nuevoTipo === 'recurrente') && !nuevaFecha) {
+      setError('Elige una fecha para esta tarea')
+      return
+    }
+
+    const nuevo = {
       titulo,
-      tipo: 'rapida',
+      tipo: nuevoTipo,
       prioridad: 'media',
       estado: 'pendiente',
-    })
+      fecha_limite: nuevoTipo === 'fecha' || nuevoTipo === 'recurrente' ? nuevaFecha : null,
+      intervalo_valor: nuevoTipo === 'recurrente' ? Number(nuevoIntervaloValor) || 1 : null,
+      intervalo_unidad: nuevoTipo === 'recurrente' ? nuevoIntervaloUnidad : null,
+    }
+
+    const { error } = await supabase.from('pendientes').insert(nuevo)
 
     if (error) {
       setError(error.message)
       return
     }
-    setNuevoTexto('')
+    resetFormNueva()
     cargarPendientes()
   }
 
@@ -96,6 +166,59 @@ export default function App() {
         fecha_completado: nuevoEstado === 'completado' ? new Date().toISOString() : null,
       })
       .eq('id', item.id)
+
+    if (error) {
+      setError(error.message)
+      return
+    }
+    cargarPendientes()
+  }
+
+  function iniciarEdicion(item) {
+    setEditandoId(item.id)
+    setEditTexto(item.titulo)
+    setEditTipo(item.tipo === 'mantenimiento' || item.tipo === 'idea' ? item.tipo : item.tipo)
+    setEditFecha(item.fecha_limite ?? '')
+    setEditIntervaloValor(item.intervalo_valor ?? 1)
+    setEditIntervaloUnidad(item.intervalo_unidad ?? 'días')
+  }
+
+  function cancelarEdicion() {
+    setEditandoId(null)
+  }
+
+  async function guardarEdicion(item) {
+    const titulo = editTexto.trim()
+    if (!titulo) return
+
+    if ((editTipo === 'fecha' || editTipo === 'recurrente') && !editFecha) {
+      setError('Elige una fecha para esta tarea')
+      return
+    }
+
+    const cambios = {
+      titulo,
+      tipo: editTipo,
+      fecha_limite: editTipo === 'fecha' || editTipo === 'recurrente' ? editFecha : null,
+      intervalo_valor: editTipo === 'recurrente' ? Number(editIntervaloValor) || 1 : null,
+      intervalo_unidad: editTipo === 'recurrente' ? editIntervaloUnidad : null,
+    }
+
+    const { error } = await supabase.from('pendientes').update(cambios).eq('id', item.id)
+
+    if (error) {
+      setError(error.message)
+      return
+    }
+    setEditandoId(null)
+    cargarPendientes()
+  }
+
+  async function eliminarPendiente(item) {
+    const confirmar = window.confirm(`¿Eliminar "${item.titulo}"? Esto no se puede deshacer.`)
+    if (!confirmar) return
+
+    const { error } = await supabase.from('pendientes').delete().eq('id', item.id)
 
     if (error) {
       setError(error.message)
@@ -122,15 +245,38 @@ export default function App() {
     <div className="page">
       <h1>Hoy</h1>
 
-      <div className="inbox">
-        <input
-          type="text"
-          placeholder="Anota algo rápido..."
-          value={nuevoTexto}
-          onChange={(e) => setNuevoTexto(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && agregarDesdeInbox()}
-        />
-        <button onClick={agregarDesdeInbox} aria-label="Agregar">+</button>
+      <div className="inbox-wrap">
+        <div className="inbox">
+          <input
+            type="text"
+            placeholder="Anota algo rápido..."
+            value={nuevoTexto}
+            onChange={(e) => setNuevoTexto(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && agregarDesdeInbox()}
+          />
+          <button
+            className={mostrarOpciones ? 'btn-opciones activo' : 'btn-opciones'}
+            onClick={() => setMostrarOpciones((o) => !o)}
+            aria-label="Fecha y recurrencia"
+            title="Fecha y recurrencia"
+          >
+            📅
+          </button>
+          <button onClick={agregarDesdeInbox} aria-label="Agregar">+</button>
+        </div>
+
+        {mostrarOpciones && (
+          <CamposFecha
+            tipo={nuevoTipo}
+            setTipo={setNuevoTipo}
+            fecha={nuevaFecha}
+            setFecha={setNuevaFecha}
+            intervaloValor={nuevoIntervaloValor}
+            setIntervaloValor={setNuevoIntervaloValor}
+            intervaloUnidad={nuevoIntervaloUnidad}
+            setIntervaloUnidad={setNuevoIntervaloUnidad}
+          />
+        )}
       </div>
 
       <div className="resumen">
@@ -168,6 +314,35 @@ export default function App() {
       <div className="lista">
         {visibles.map((item) => {
           const hecho = item.estado === 'completado'
+          const enEdicion = editandoId === item.id
+
+          if (enEdicion) {
+            return (
+              <div className="tarjeta tarjeta-edicion" key={item.id}>
+                <input
+                  type="text"
+                  className="input-edicion"
+                  value={editTexto}
+                  onChange={(e) => setEditTexto(e.target.value)}
+                />
+                <CamposFecha
+                  tipo={editTipo}
+                  setTipo={setEditTipo}
+                  fecha={editFecha}
+                  setFecha={setEditFecha}
+                  intervaloValor={editIntervaloValor}
+                  setIntervaloValor={setEditIntervaloValor}
+                  intervaloUnidad={editIntervaloUnidad}
+                  setIntervaloUnidad={setEditIntervaloUnidad}
+                />
+                <div className="acciones-edicion">
+                  <button className="btn-guardar" onClick={() => guardarEdicion(item)}>Guardar</button>
+                  <button className="btn-cancelar" onClick={cancelarEdicion}>Cancelar</button>
+                </div>
+              </div>
+            )
+          }
+
           return (
             <div className="tarjeta" key={item.id}>
               <button
@@ -185,6 +360,10 @@ export default function App() {
                 </div>
               </div>
               <span className={`prioridad prioridad-${item.prioridad}`} />
+              <div className="acciones">
+                <button className="btn-icono" onClick={() => iniciarEdicion(item)} aria-label="Editar" title="Editar">✎</button>
+                <button className="btn-icono" onClick={() => eliminarPendiente(item)} aria-label="Eliminar" title="Eliminar">🗑</button>
+              </div>
             </div>
           )
         })}
